@@ -4,4 +4,4 @@ lib_name := LCD-NHD0440
 libs := wire i2cparallel dbglib
 src_dirs := .
 
-include ../makefiles/arduino.mk
+include ../arduino-makefile/arduino.mk

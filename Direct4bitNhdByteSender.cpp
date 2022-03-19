@@ -1,7 +1,7 @@
 // (c) Copyright 2021 Aaron Kimball
 
 #include "LCD-NHD0440.h"
-#include "nanodelay.h"
+#include "util/nanodelay.h"
 
 Direct4BitNhdByteSender::Direct4BitNhdByteSender(
     uint8_t EN1, uint8_t EN2, uint8_t RW, uint8_t RS,

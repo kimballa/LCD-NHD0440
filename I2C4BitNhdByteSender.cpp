@@ -1,7 +1,7 @@
 // (c) Copyright 2021 Aaron Kimball
 
 #include "LCD-NHD0440.h"
-#include "nanodelay.h"
+#include "util/nanodelay.h"
 
 static const uint8_t enFlag_L_mask = 0x3F;   // Mask with enable flags held low.
 
