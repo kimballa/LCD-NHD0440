@@ -1,45 +1,76 @@
-// (C) Copyright 2021 Aaron Kimball
-//
-// Driver for Newhaven Devices 0440-series 4x40 char LCDs
-// These LCDs are integrated on top of a pair of ST7066U LCD ICs.
-// (A Hitachi HD44780-compatible chip.)
-//
-// Datasheet references:
-// * Display:   https://www.mouser.com/datasheet/2/291/NHD-0440WH-ATFH-JT-47935.pdf
-// * Driver IC: https://www.newhavendisplay.com/resources_dataFiles/datasheets/LCDs/ST7066U.pdf
-//
-// This driver uses the 4-bit bus mode (not 8-bit).
-//
-// This can either be directly attached to 8 I/O lines of the AVR, or the E1,
-// E2, RW, RS, and the 4 data bits can be collectively attached over an I2C
-// 8-bit bus connected with the I2CParallel lib.  In this mode, the LCD can be
-// controlled with only 2 shared I2C pins from the AVR.
-//
-// You must instantiate the correct NhdByteSender based on the connection mode:
-//
-//    /* -- Use one of the following two code snippets -- */
-//    // Connect via I2C to PCF8574[A] parallel port.
-//    Wire.begin();
-//    I2C4BitNhdByteSender byteSender();
-//    byteSender.init(I2C_PCF8574A_MIN_ADDR); // or your addr of parallel port on I2C bus.
-//
-//    /* --or-- */
-//    // Use Arduino D11..D4 gpio pins as direct-wired bus.
-//    Direct4BitNhdByteSender byteSender(11, 10, 9, 8, 7, 6, 5, 4);
-//    byteSender.init();
-//
-//    /* -- Then follow either of the above with -- */
-//    NewhavenLcd0440 lcd;
-//    lcd.init(&byteSender); // Connect LCD to bus & send LCD init commands.
-//
-//    /* -- Then use LCD according to API. e.g.: -- */
-//    lcd.print("Hello, world!");
-//    delay(1000);
-//    lcd.clear(); // clear screen
-//    lcd.setCursor(2, 0); // put cursor on 3rd row
-//    lcd.print("More text...");
-//
-//
+/*
+  (c) Copyright 2021 Aaron Kimball
+  See full licensing terms at the end of this comment block, or in LICENSE.txt.
+
+  Arduino driver for Newhaven Devices 0440-series 4x40 char LCDs.
+  These LCDs are integrated on top of a pair of ST7066U LCD ICs.
+  (A Hitachi HD44780-compatible chip.)
+
+  Datasheet references:
+  * Display:   https://www.mouser.com/datasheet/2/291/NHD-0440WH-ATFH-JT-47935.pdf
+  * Driver IC: https://www.newhavendisplay.com/resources_dataFiles/datasheets/LCDs/ST7066U.pdf
+
+  This driver uses the 4-bit bus mode (not 8-bit).
+
+  This can either be directly attached to 8 I/O lines of the AVR, or the E1,
+  E2, RW, RS, and the 4 data bits can be collectively attached over an I2C
+  8-bit bus connected with the I2CParallel lib.  In this mode, the LCD can be
+  controlled with only 2 shared I2C pins from the AVR.
+
+  You must instantiate the correct NhdByteSender based on the connection mode:
+
+     #include<LCD-NHD0440.h>  // Include this header file.
+
+     // -- Use one of the following two code snippets --
+     // Connect via I2C to PCF8574[A] parallel port.
+     Wire.begin();
+     I2C4BitNhdByteSender byteSender();
+     byteSender.init(I2C_PCF8574A_MIN_ADDR); // or your addr of parallel port on I2C bus.
+
+     // --or--
+     // Use Arduino D11..D4 gpio pins as direct-wired bus.
+     Direct4BitNhdByteSender byteSender(11, 10, 9, 8, 7, 6, 5, 4);
+     byteSender.init();
+
+     // -- Then follow either of the above with --
+     NewhavenLcd0440 lcd;
+     lcd.init(&byteSender); // Connect LCD to bus & send LCD init commands.
+
+     // -- Then use LCD according to API. e.g.: --
+     lcd.print("Hello, world!");
+     delay(1000);
+     lcd.clear(); // clear screen
+     lcd.setCursor(2, 0); // put cursor on 3rd row
+     lcd.println("More text...");
+
+
+  BSD 3-Clause license text:
+  Copyright 2022 Aaron Kimball
+
+  Redistribution and use in source and binary forms, with or without modification, are
+  permitted provided that the following conditions are met:
+
+    1. Redistributions of source code must retain the above copyright notice, this list of
+       conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright notice, this list
+       of conditions and the following disclaimer in the documentation and/or other materials
+       provided with the distribution.
+    3. Neither the name of the copyright holder nor the names of its contributors may be
+       used to endorse or promote products derived from this software without specific prior
+       written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+  EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+  COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+  TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
 
 #ifndef LCD_NHD_0440_H
 #define LCD_NHD_0440_H
@@ -69,8 +100,10 @@ public:
  * Send data to the NHD 0440 in 4-bit bus mode. The Arduino sends data over I2C
  * to a PCF8574 8-bit bus expander (via I2CParallel lib). The 8-bit bus i/o is wired
  * to the NHD 0440 as follows:
- * P7 P6 P5 P4  P3  P2  P1  P0 <-- PCF8574
- * E1 E2 RW RS DB7 DB6 DB5 DB4 <-- LCD0440
+ *
+ *   P7 P6 P5 P4  P3  P2  P1  P0 <-- PCF8574
+ *    |  |  |  |  |   |   |   |
+ *   E1 E2 RW RS DB7 DB6 DB5 DB4 <-- LCD0440
  */
 class I2C4BitNhdByteSender : public NhdByteSender {
 public:
@@ -102,7 +135,10 @@ private:
  *
  * The LCD0440 has 8 I/O pins as follows: En1 En2 RW RS DB7 DB6 DB5 DB4.
  * You must initialize the ByteSender with Arduino pin numbers that map to each
- * of these. (In 4-bit mode, DB3..0 are not used and should be tied to GND.)
+ * of these.
+ *
+ * In 4-bit mode, DB3..0 are not used and should be tied to GND. (Testing of my
+ * own device suggests they can also be allowed to float.)
  */
 class Direct4BitNhdByteSender : public NhdByteSender {
 public:
@@ -154,7 +190,7 @@ private:
   void _setCursorDisplay(uint8_t displayNum);
   void _sendDisplayFlags();
   void _waitReady(unsigned int delay_micros);
-  void _scrollScreen(); 
+  void _scrollScreen();
 
   NhdByteSender* _byteSender;
 

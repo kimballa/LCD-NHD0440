@@ -1,4 +1,6 @@
 // (c) Copyright 2021 Aaron Kimball
+// This file is licensed under the BSD 3-clause open source license.
+// See LICENSE.txt for full licensing terms.
 //
 // Macros to perform blocking delay for sub-microsecond intervals.
 // The delay macros here are defined in terms of the chip's clock speed. They will delay for

@@ -1,4 +1,6 @@
 // (c) Copyright 2021 Aaron Kimball
+// This file is licensed under the BSD 3-clause open source license.
+// See LICENSE.txt for full licensing terms.
 
 #include "LCD-NHD0440.h"
 #include "util/nanodelay.h"
