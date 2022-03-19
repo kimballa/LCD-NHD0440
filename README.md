@@ -1,6 +1,6 @@
 
 LCD-NHD0440
-=========
+===========
 
 An Arduino driver library for the Newhaven Devices `0440` series of 4x40 char LCDs.
 Includes a "TTY scrolling" feature that scrolls lines upward as you emit more lines with
