@@ -4,7 +4,7 @@
 //
 // Newhaven 0440-specific implementation.
 
-#include "LCD-NHD0440.h"
+#include "../LCD-NHD0440.h"
 #include "Newhaven0440Impl.h"
 
 // Timing structure with data specific to the Newhaven 0440.

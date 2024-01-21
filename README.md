@@ -38,11 +38,11 @@ I build this with my [Arduino makefile](https://github.com/kimballa/arduino-make
 Usage
 -----
 
-* Include `LCD-NHD0440.h` in your sketch source file.
+* `#include <LCD-NHD0440.h>` in your sketch source file.
 * Create an instance of the `ST7066UController<n_rows, n_cols, n_screens>` class and
   provide a reference to a `constexpr ST7066UTiming` struct with the timing data needed to
   communicate with the device.
-* To use the Newhaven 0440 specifically, include `Newhaven0440Impl.h` and create an
+* To use the Newhaven 0440 specifically, `#include <lcd/Newhaven0440Impl.h>` and create an
   instance of the `NewhavenLcd0440` class, instead. The timing data is already configured.
 * Add `libs := Wire LCD-NHD0440 i2cparallel` to your arduino.mk-driven Makefile.
 * This project includes multiple communication bus implementations depending on whether

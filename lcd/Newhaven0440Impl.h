@@ -7,7 +7,7 @@
 #ifndef _NEWHAVEN_0440_IMPL_H
 #define _NEWHAVEN_0440_IMPL_H
 
-#include "LCD-NHD0440.h"
+#include "../LCD-NHD0440.h"
 
 // Timing constants below are used only in the Newhaven 0440-specific implementation,
 // but are retained as distinct constant #define's below for backward compatibility.
