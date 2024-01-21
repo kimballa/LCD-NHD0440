@@ -2,7 +2,9 @@
   (c) Copyright 2021 Aaron Kimball
   See full licensing terms at the end of this comment block, or in LICENSE.txt.
 
-  Arduino driver for Newhaven Devices 0440-series 4x40 char LCDs.
+  Arduino driver for ST7066U-compatible LCD controllers.
+  This library can handle one or two ST7066U controllers per screen; the latter case
+  is used in the Newhaven Devices 0440-series 4x40 char LCDs, which this library was built to support.
   These LCDs are integrated on top of a pair of ST7066U LCD ICs.
   (A Hitachi HD44780-compatible chip.)
 
@@ -20,6 +22,7 @@
   You must instantiate the correct NhdByteSender based on the connection mode:
 
      #include<LCD-NHD0440.h>  // Include this header file.
+     #include<Newhaven0440Impl.h> // Include the Newhaven 0440-specific implementation header.
 
      // -- Use one of the following two code snippets --
      // Connect via I2C to PCF8574[A] parallel port.
@@ -34,9 +37,14 @@
 
      // -- Then follow either of the above with --
      NewhavenLcd0440 lcd;
-     lcd.init(&byteSender); // Connect LCD to bus & send LCD init commands.
 
-     // -- Then use LCD according to API. e.g.: --
+     // ... or define an LCD of arbitrary dimensions or I/O timing:
+     constexpr ST7066UTiming timing(bootMs, clearUs, homeUs, defaultUs, busyFlagUs, busNanos);
+     ST7066UController<n_rows, n_cols, n_screens> lcd(timing);
+
+     // -- Then connect LCD to bus & send LCD init commands and use LCD according to API. e.g.: --
+     lcd.init(&byteSender);
+
      lcd.print("Hello, world!");
      delay(1000);
      lcd.clear(); // clear screen
@@ -104,6 +112,12 @@ public:
  *   P7 P6 P5 P4  P3  P2  P1  P0 <-- PCF8574
  *    |  |  |  |  |   |   |   |
  *   E1 E2 RW RS DB7 DB6 DB5 DB4 <-- LCD0440
+ *
+ * For a single controller (1- or 2-line) LCD, P6 is not connected:
+ *
+ *   P7 P6 P5 P4  P3  P2  P1  P0 <-- PCF8574
+ *    |  |  |  |  |   |   |   |
+ *   E1  x RW RS DB7 DB6 DB5 DB4 <-- ST7066U controller
  */
 class I2C4BitNhdByteSender : public NhdByteSender {
 public:
@@ -130,12 +144,13 @@ private:
 };
 
 /**
- * Send data to the NHD 0440 in 4-bit bus mode. The Arduino sends data using
+ * Send data to the LCD in 4-bit bus mode. The Arduino sends data using
  * 8 GPIO pins wired to the NHD 0440.
  *
  * The LCD0440 has 8 I/O pins as follows: En1 En2 RW RS DB7 DB6 DB5 DB4.
  * You must initialize the ByteSender with Arduino pin numbers that map to each
- * of these.
+ * of these. For a single-controller (1- or 2-line) LCD, En2 should be the same
+ * pin number as En1.
  *
  * In 4-bit mode, DB3..0 are not used and should be tied to GND. (Testing of my
  * own device suggests they can also be allowed to float.)
@@ -164,11 +179,57 @@ private:
 };
 
 
-// Main API to control the Newhaven 0440 series LCD
-class NewhavenLcd0440 : public Print {
+/**
+ * Structure that defines timing requirements for a particular display controller.
+ */
+typedef struct _ST7066UTiming {
+  /** milliseconds to wait after system startup for the display to boot before sending commands. */
+  const uint32_t bootTimeMillis;
+  /** microseconds to delay after issuing CLEAR command. */
+  const uint32_t clearDelayUs;
+  /** microseconds to delay after issuing HOME command. */
+  const uint32_t homeDelayUs;
+  /** microseconds to delay after issuing any other command. */
+  const uint32_t defaultDelayUs;
+  /** microseconds to delay until the BUSY flag is valid to read. */
+  const uint32_t busyFlagPollDelayUs;
+  /**
+   * Fastest timing we can push data through the bus and cycle the enable flag to high, low, and high again.
+   * If using the I2C bus this is likely irrelevant since each state change has a 4us hold time, but
+   * a direct pinout connection could violate this timing constraint unless guarded against.
+   */
+  const uint32_t busCycleTimeNanoseconds;
+
+  constexpr _ST7066UTiming(uint32_t boot, uint32_t clear, uint32_t home, uint32_t _default, uint32_t busyFlag,
+      uint32_t bus):
+        bootTimeMillis(boot), clearDelayUs(clear), homeDelayUs(home), defaultDelayUs(_default),
+        busyFlagPollDelayUs(busyFlag), busCycleTimeNanoseconds(bus) {
+  };
+} ST7066UTiming;
+
+/**
+ * Main implementation class for an LCD or OLED display integration based on the ST7066U or
+ * compatible display controller.
+ *
+ * This is a configurable template class allowing you to define the number of rows and columns,
+ * and can also operate in a "multi-screen" mode that stitches two screens/controllers together.
+ * N_ROWS and N_COLS specify the total number of rows and columns in the conjoined display (e.g. 2x16
+ * or 2x20). If there is only a single display, these refer to rows and columns of characters on
+ * that display.
+ *
+ * A four line display split across two ST7066U controllers can be controlled as a single logical
+ * device, where the first controller handles lines 0 and 1, and the second controller handles lines
+ * 2 and 3. Both devices must be configured with a matching number of columns.
+ *
+ * In multi-controller mode, two enable / chip select lines are used to write to one or the other
+ * controller, or for operations like "clear screen", both at once. In single-controller mode, only
+ * the 'EN1' chip select line is used and EN2 is ignored.
+ */
+template<unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS=1>
+class ST7066UController : public Print {
 public:
-  NewhavenLcd0440();
-  ~NewhavenLcd0440();
+  ST7066UController(const ST7066UTiming &timing);
+  ~ST7066UController();
 
   void init(NhdByteSender *byteSender);  // setup lcd board state.
   void clear(); // clear screen and return home
@@ -177,7 +238,7 @@ public:
   void setCursor(bool visible, bool blinking); // turn cursor on or off
   void reset() { init(_byteSender); }; // reset LCD state.
 
-  // Set position on row 0--3, col 0--39 across the two subscreens.
+  // Set position on row (e.g., 0--3), col (e.g., 0--39) across the screen(s).
   void setCursorPos(uint8_t row, uint8_t col);
 
   void setScrollingTTY(bool scroll); // Enable/disable scrolling display.
@@ -196,7 +257,10 @@ private:
 
   uint8_t _pos; // row is [0--3] in ROW_MASK, col is [0--39] in COL_MASK.
   uint8_t _displayFlags; // state of display flags for both subscreens.
+
+  const ST7066UTiming &_timing;
 };
+
 
 #define COL_MASK  ((uint8_t)0x3F)
 #define COL_SHIFT ((uint8_t)0)
@@ -213,7 +277,7 @@ private:
 #define DISP_FLAG_C2 ((uint8_t)0x10) // cursor vis
 #define DISP_FLAG_B2 ((uint8_t)0x08) // blink
 
-#define DISP_FLAG_SCROLL ((uint8_t)0x40) // flag to indicate scrolling behavior after 4th line
+#define DISP_FLAG_SCROLL ((uint8_t)0x40) // flag to indicate scrolling behavior after last line
 
 #define DISPLAY_BITS_MASK ((uint8_t)0x7)
 #define DISPLAY_1_SHIFT ((uint8_t)0)
@@ -234,8 +298,9 @@ private:
 #define LCD_CTRL_FLAGS (LCD_RS | LCD_RW)
 #define LCD_ENABLE_FLAGS (LCD_E1 | LCD_E2)
 
-// Bitfield pattern for all (both) enable lines.
-#define LCD_EN_ALL (LCD_E1 | LCD_E2)
+// Bitfield pattern for all enable lines.
+// If N_SCREENS is 2, that means LCD_E1 and LCD_E2; otherwise just LCD_E1.
+#define LCD_EN_ALL (((N_SCREENS) > 1) ? (LCD_E1 | LCD_E2) : (LCD_E1))
 
 // LCD_RW signal values
 #define LCD_RW_READ    (LCD_RW)
@@ -295,32 +360,9 @@ private:
 #define CGRAM_ADDR_MASK 0x3F
 #define DDRAM_ADDR_MASK 0x7F
 
-// Cannot operate the NHD0440 until millis() returns > BOOT_TIME_MILLIS
-// (tIOL is min 40ms; we need to hold the IO pins *low* during this period.)
-#define NHD_0440_BOOT_TIME_MILLIS ((unsigned long)50)
-
-// Delay timing in microseconds for NHD0440 operations after communicating over the bus
-// to the ST7066.
-
-// Delay timing for 'clear' and 'home' commands
-#define NHD_CLEAR_DELAY_US          1520
-#define NHD_HOME_DELAY_US           1520
-// Delay timing for all other commands, RAM reads and writes
-#define NHD_DEFAULT_DELAY_US          37
-// Despite only 37us needed for most commands, the busy flag isn't valid until T+80us
-#define NHD_BUSY_FLAG_POLL_DELAY_US   80
-
-// Fastest we can push data thru the bus and cycle the enable flag to high, low, and high again.
-// If using the I2C bus this is irrelevant since each state change has a 4us hold time, but
-// a direct pinout connection could violate this timing constraint unless guarded against.
-#define NHD_BUS_CYCLE_TIME_NS       1200
-
 // internal id numbers for the two sub-screens. enable-line E1 latches the top
 // subscreen (rows 0 & 1), E2 latches for the bottom subscreen (rows 2 & 3).
 #define DISPLAY_TOP    ((uint8_t)0)
 #define DISPLAY_BOTTOM ((uint8_t)1)
-
-#define LCD_NUM_ROWS  ((uint8_t)4)
-#define LCD_NUM_COLS  ((uint8_t)40)
 
 #endif /* LCD_NHD_0440_H */

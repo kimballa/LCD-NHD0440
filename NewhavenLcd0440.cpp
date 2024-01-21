@@ -21,31 +21,40 @@ static inline uint8_t _makePos(uint8_t row, uint8_t col) {
 }
 
 // Increment the 'col' field of pos by 1 and return the new 'col' value.
-// Note that this can set _pos to illegal values where col >= LCD_NUM_COLS.
+// Note that this can set _pos to illegal values where col >= N_COLS.
 // The caller is responsible for detecting overflow.
 static inline uint8_t _incrementCol(uint8_t &pos) {
   // col is in low-order bits, so just increment.
   return _getCol(++pos);
 }
 
-NewhavenLcd0440::NewhavenLcd0440() {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+ST7066UController<N_ROWS, N_COLS, N_SCREENS>::ST7066UController(const ST7066UTiming &timing):
+    _timing(timing) {
+
   _pos = 0;
   _byteSender = NULL;
   _displayFlags = 0;
+
+  if (N_SCREENS != 1 && N_SCREENS != 2) {
+    DBGPRINTI("N_SCREENS must be 1 or 2; invalid argument: ", N_SCREENS);
+  }
 }
 
-NewhavenLcd0440::~NewhavenLcd0440() {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+ST7066UController<N_ROWS, N_COLS, N_SCREENS>::~ST7066UController() {
   _byteSender = NULL; // discard reference to associated object. do not free in here, it was never ours.
 }
 
-void NewhavenLcd0440::init(NhdByteSender *byteSender) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::init(NhdByteSender *byteSender) {
   _byteSender = byteSender;
 
-  // Wait for millis() [time since boot] > HD_0440_BOOT_TIME_MILLIS.
+  // Wait for millis() [time since boot] > the configured bootup timing.
   // The device needs to go thru its internal setup logic before it can accept commands.
   unsigned long start_time = millis();
-  while (start_time < NHD_0440_BOOT_TIME_MILLIS) {
-    unsigned long remaining = NHD_0440_BOOT_TIME_MILLIS - start_time + 1;
+  while (start_time < _timing.bootTimeMillis) {
+    unsigned long remaining = _timing.bootTimeMillis - start_time + 1;
     delay(remaining);
     start_time = millis();
   }
@@ -60,20 +69,20 @@ void NewhavenLcd0440::init(NhdByteSender *byteSender) {
   for (uint8_t i = 0; i < 3; i++) {
     // Send 8-bit-at-once command to affirm 8-bit bus. db3..db0 are 'X' / don't care in this config.
     _byteSender->sendHighNibble(LCD_OP_FUNC_SET | FUNC_SET_8_BIT_BUS, ctrlFlags, LCD_EN_ALL);
-    _waitReady(NHD_DEFAULT_DELAY_US);
+    _waitReady(_timing.defaultDelayUs);
   }
 
   // Send command to shift to 4-bit-bus mode. We send this as an 8-bit command,
   // so we only send the high nibble.
   _byteSender->sendHighNibble(LCD_OP_FUNC_SET_WITH_DATA_LEN, ctrlFlags, LCD_EN_ALL);
-  _waitReady(NHD_DEFAULT_DELAY_US);
+  _waitReady(_timing.defaultDelayUs);
 
   // We are now in 4-bit mode. We want to configure other settings, so we transmit
   // both nibbles one after the other: the opcode & 4-bit bus flag, followed by line
   // count & font size.
   _byteSender->sendByte(LCD_OP_FUNC_SET_WITH_DATA_LEN | FUNC_SET_2_LINES | FUNC_SET_FONT_5x8,
       ctrlFlags, LCD_EN_ALL);
-  _waitReady(NHD_DEFAULT_DELAY_US);
+  _waitReady(_timing.defaultDelayUs);
 
   // Reset display flags in case they were previously corrupt.
   _displayFlags = 0;
@@ -85,22 +94,25 @@ void NewhavenLcd0440::init(NhdByteSender *byteSender) {
 
   // Set ENTRY_MODE to be CURSOR_RIGHT.
   _byteSender->sendByte(LCD_OP_ENTRY_MODE_SET | LCD_ENTRY_MODE_CURSOR_RIGHT, ctrlFlags, LCD_EN_ALL);
-  _waitReady(NHD_DEFAULT_DELAY_US);
+  _waitReady(_timing.defaultDelayUs);
 
   // The display is now ready for text.
 }
 
-void NewhavenLcd0440::clear() {
-  _sendCommand(LCD_OP_CLEAR, LCD_EN_ALL, NHD_CLEAR_DELAY_US);
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::clear() {
+  _sendCommand(LCD_OP_CLEAR, LCD_EN_ALL, _timing.clearDelayUs);
   setCursorPos(0, 0); // Reset Arduino knowledge of cursor & reset active display to TOP.
 }
 
-void NewhavenLcd0440::home() {
-  _sendCommand(LCD_OP_RETURN_HOME, LCD_EN_ALL, NHD_HOME_DELAY_US);
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::home() {
+  _sendCommand(LCD_OP_RETURN_HOME, LCD_EN_ALL, _timing.homeDelayUs);
   setCursorPos(0, 0); // Reset Arduino knowledge of cursor & reset active display to TOP.
 }
 
-void NewhavenLcd0440::setDisplayVisible(bool visible) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::setDisplayVisible(bool visible) {
   if (visible) {
     _displayFlags |= DISP_FLAG_D1 | DISP_FLAG_D2;
   } else {
@@ -110,11 +122,12 @@ void NewhavenLcd0440::setDisplayVisible(bool visible) {
   _sendDisplayFlags();
 }
 
-void NewhavenLcd0440::setCursor(bool visible, bool blinking) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::setCursor(bool visible, bool blinking) {
   // Only manipulate cursor for the active lcd subscreen (based on cursor row).
   // The inactive subscreen should always have no cursor shown.
   uint8_t vis_mask, blink_mask;
-  if (_getRow(_pos) < 2) {
+  if (_getRow(_pos) < 2 || N_SCREENS < 2) {
     vis_mask = DISP_FLAG_C1;
     blink_mask = DISP_FLAG_B1;
   } else {
@@ -138,37 +151,43 @@ void NewhavenLcd0440::setCursor(bool visible, bool blinking) {
 }
 
 // Which of the two subscreens is a given row on?
-static uint8_t _subscreenForRow(uint8_t row) {
-  return (row < 2) ? DISPLAY_TOP : DISPLAY_BOTTOM;
+static uint8_t _subscreenForRow(uint8_t row, uint8_t n_screens) {
+  return (row < 2 || n_screens < 2) ? DISPLAY_TOP : DISPLAY_BOTTOM;
 }
 
 /**
- * Set the cursor position in the 4x40 char screen.
+ * Set the cursor position in the N_ROWSxN_COLS char screen.
  *
- * In practice this means determining which of the two subscreens we're on, moving the
+ * In practice this means determining which of the subscreens we're on, moving the
  * cursor appropriately within the subscreen, and setting cursor visibility only on the
  * appropriate subscreen.
  */
-void NewhavenLcd0440::setCursorPos(uint8_t row, uint8_t col) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::setCursorPos(uint8_t row, uint8_t col) {
   _setCursorPos(row, col, true);
 }
 
 /**
- * Set the cursor position in the 4x40 char screen.
+ * Set the cursor position in the N_ROWSxN_COLS char screen.
  *
- * If `updateDisplayFlags`, determine which of the two subscreens we're on, move the
+ * If `updateDisplayFlags`, determine which of the subscreens we're on, move the
  * cursor appropriately within the subscreen, and set cursor visibility only on the
  * appropriate subscreen. Setting to 'false' will skip display flag updates but may
  * cause the display to go out of sync unless you move it back to the right subscreen.
  */
-void NewhavenLcd0440::_setCursorPos(uint8_t row, uint8_t col, bool updateDisplayFlags) {
-  const uint8_t subscreen = _subscreenForRow(row);
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_setCursorPos(
+    uint8_t row, uint8_t col, bool updateDisplayFlags) {
+
+  const uint8_t subscreen = _subscreenForRow(row, N_SCREENS);
   // Choose e1 or e2 based on subscreen for row.
   const uint8_t enablePin = (subscreen == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
 
   const uint8_t inScreenRow = (row >= 2) ? (row - 2) : row; // Row within subscreen.
-  const uint8_t addr = col + ((inScreenRow == 0) ? 0 : 0x40);
-  _sendCommand(LCD_OP_SET_DDRAM_ADDR | addr, enablePin, NHD_DEFAULT_DELAY_US);
+  constexpr uint8_t LINE_1_RAM_OFFSET = 0; // First row is addrs 0...(N_COLS-1)
+  constexpr uint8_t LINE_2_RAM_OFFSET = 0x40; // Second row is addrs 0x40...(0x40 + N_COLS - 1)
+  const uint8_t addr = col + ((inScreenRow == 0) ? LINE_1_RAM_OFFSET : LINE_2_RAM_OFFSET);
+  _sendCommand(LCD_OP_SET_DDRAM_ADDR | addr, enablePin, _timing.defaultDelayUs);
 
   if (updateDisplayFlags) {
     _setCursorDisplay(subscreen); // Make sure cursor is on the right subscreen.
@@ -177,8 +196,9 @@ void NewhavenLcd0440::_setCursorPos(uint8_t row, uint8_t col, bool updateDisplay
 }
 
 // Ensures the cursor is visible on the specified display subscreen.
-void NewhavenLcd0440::_setCursorDisplay(uint8_t displayNum) {
-  const uint8_t curDisplay = _subscreenForRow(_getRow(_pos));
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_setCursorDisplay(uint8_t displayNum) {
+  const uint8_t curDisplay = _subscreenForRow(_getRow(_pos), N_SCREENS);
   if (curDisplay == displayNum) {
     return; // Nothing to do.
   }
@@ -192,14 +212,20 @@ void NewhavenLcd0440::_setCursorDisplay(uint8_t displayNum) {
 }
 
 // Send display and cursor vis flags to device.
-void NewhavenLcd0440::_sendDisplayFlags() {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_sendDisplayFlags() {
   uint8_t display1 = LCD_OP_DISPLAY_ON_OFF | ((_displayFlags >> DISPLAY_1_SHIFT) & DISPLAY_BITS_MASK);
   uint8_t display2 = LCD_OP_DISPLAY_ON_OFF | ((_displayFlags >> DISPLAY_2_SHIFT) & DISPLAY_BITS_MASK);
-  _sendCommand(display1, LCD_E1, 0); // No delay; the 2nd delay handles both subscreens.
-  _sendCommand(display2, LCD_E2, NHD_DEFAULT_DELAY_US);
+  // In a multi-display config, first command needs no delay; the 2nd delay handles both subscreens.
+  const uint32_t display1Delay = N_SCREENS < 2 ? _timing.defaultDelayUs : 0;
+  _sendCommand(display1, LCD_E1, display1Delay);
+  if (N_SCREENS > 1) {
+    _sendCommand(display2, LCD_E2, _timing.defaultDelayUs);
+  }
 }
 
-void NewhavenLcd0440::setScrollingTTY(bool scroll) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::setScrollingTTY(bool scroll) {
   if (scroll) {
     _displayFlags |= DISP_FLAG_SCROLL;
   } else {
@@ -210,7 +236,8 @@ void NewhavenLcd0440::setScrollingTTY(bool scroll) {
 /**
  * Wait until the display is ready / finished processing the command.
  */
-void NewhavenLcd0440::_waitReady(unsigned int delay_micros) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_waitReady(unsigned int delay_micros) {
   unsigned long start_time = micros();
   unsigned long elapsed = 0;
 
@@ -226,13 +253,14 @@ void NewhavenLcd0440::_waitReady(unsigned int delay_micros) {
 }
 
 // Actually write a byte to the screen.
-size_t NewhavenLcd0440::write(uint8_t chr) {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+size_t ST7066UController<N_ROWS, N_COLS, N_SCREENS>::write(uint8_t chr) {
   if (chr == '\r') {
     setCursorPos(_getRow(_pos), 0);
     return 1;
   } else if (chr == '\n') {
     const uint8_t newRow = _getRow(_pos) + 1;
-    if (newRow >= LCD_NUM_ROWS) {
+    if (newRow >= N_ROWS) {
       if (_displayFlags & DISP_FLAG_SCROLL) {
         _scrollScreen();
       } else {
@@ -244,12 +272,12 @@ size_t NewhavenLcd0440::write(uint8_t chr) {
     return 1;
   }
 
-  if (_getCol(_pos) >= LCD_NUM_COLS) {
+  if (_getCol(_pos) >= N_COLS) {
     // Prior write was to the last column on the screen, and we didn't handle
-    // a '\n' or '\r' above, meaning we're writing to the "41st" column. (nope!)
+    // a '\n' or '\r' above, meaning we're writing to the "n+1st" column. (nope!)
     // Wrap to the next line before printing.
     const uint8_t nextRow = _getRow(_pos) + 1;
-    if (nextRow >= LCD_NUM_ROWS) {
+    if (nextRow >= N_ROWS) {
       if (_displayFlags & DISP_FLAG_SCROLL) {
         _scrollScreen();
       } else {
@@ -263,9 +291,9 @@ size_t NewhavenLcd0440::write(uint8_t chr) {
   // We're now in a valid location to write a character.
   static const uint8_t ctrlFlags = LCD_RW_WRITE | LCD_RS_DATA;
   // choose enable flag based on current row.
-  const uint8_t enablePin = (_subscreenForRow(_getRow(_pos)) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
+  const uint8_t enablePin = (_subscreenForRow(_getRow(_pos), N_SCREENS) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
   _byteSender->sendByte(chr, ctrlFlags, enablePin);
-  _waitReady(NHD_DEFAULT_DELAY_US);
+  _waitReady(_timing.defaultDelayUs);
   _incrementCol(_pos);
 
   return 1;
@@ -274,29 +302,30 @@ size_t NewhavenLcd0440::write(uint8_t chr) {
 /**
  * Scroll all the lines up by 1.
  */
-void NewhavenLcd0440::_scrollScreen() {
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_scrollScreen() {
 
   static const uint8_t ctrlFlagsR = LCD_RW_READ | LCD_RS_DATA;
   static const uint8_t ctrlFlagsW = LCD_RW_WRITE | LCD_RS_DATA;
 
-  for (uint8_t r = 1; r < LCD_NUM_ROWS; r++) {
-    const uint8_t enFlagR = (_subscreenForRow(r) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
-    const uint8_t enFlagW = (_subscreenForRow(r - 1) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
+  for (uint8_t r = 1; r < N_ROWS; r++) {
+    const uint8_t enFlagR = (_subscreenForRow(r, N_SCREENS) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
+    const uint8_t enFlagW = (_subscreenForRow(r - 1, N_SCREENS) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
 
     // Buffer one row of char RAM locally.
     // NOTE(aaron): This read-all-then-write-all pattern makes use of the LCD's internal
     // cursor to minimize the number of setPosition() calls. If a 40 byte buffer is too
     // big for the stack, we could do this in blocks of 8 chars to compromise between
     // stack usage and I/O latency.
-    uint8_t buffer[LCD_NUM_COLS];
+    uint8_t buffer[N_COLS];
 
     _setCursorPos(r, 0, false);
     _byteSender->setBusMode(NHD_MODE_READ);
     uint8_t lastRealPos = 0;
-    for (uint8_t c = 0; c < LCD_NUM_COLS; c++) {
+    for (uint8_t c = 0; c < N_COLS; c++) {
       // Read operation also moves the cursor 1 to the right.
       uint8_t v = _byteSender->readByte(ctrlFlagsR, enFlagR);
-      _waitReady(NHD_DEFAULT_DELAY_US);
+      _waitReady(_timing.defaultDelayUs);
       buffer[c] = v;
       if (v != ' ') {
         lastRealPos = c; // We have chars to copy out at least thru this position.
@@ -307,12 +336,13 @@ void NewhavenLcd0440::_scrollScreen() {
     if (r == 1) {
       // We just read the 2nd row of the screen, to copy it to the
       // first row. Clear the upper subscreen (and reset to (0, 0)).
-      _sendCommand(LCD_OP_CLEAR, LCD_E1, NHD_CLEAR_DELAY_US);
-    } else if (r == LCD_NUM_ROWS - 1) {
+      _sendCommand(LCD_OP_CLEAR, LCD_E1, _timing.clearDelayUs);
+    } else if (r == N_ROWS - 1) {
       // We just read the last row of the screen, to copy it to the
       // second-to-last row. Clear the bottom display first, to wipe
       // the last line out 0.5ms faster than we could set it byte-by-byte.
-      _sendCommand(LCD_OP_CLEAR, LCD_E2, NHD_CLEAR_DELAY_US);
+      uint8_t enableFlagForClear = (N_SCREENS > 1) ? LCD_E2 : LCD_E1;
+      _sendCommand(LCD_OP_CLEAR, enableFlagForClear, _timing.clearDelayUs);
     } else {
       // Reset cursor position to prior row.
       _setCursorPos(r - 1, 0, false);
@@ -324,15 +354,17 @@ void NewhavenLcd0440::_scrollScreen() {
         break; // No need to copy further in this line.
       }
       _byteSender->sendByte(buffer[c], ctrlFlagsW, enFlagW);
-      _waitReady(NHD_DEFAULT_DELAY_US);
+      _waitReady(_timing.defaultDelayUs);
     }
   }
 
-  _setCursorPos(LCD_NUM_ROWS - 1, 0, false); // Return cursor to beginning of bottom line.
+  _setCursorPos(N_ROWS - 1, 0, false); // Return cursor to beginning of bottom line.
 }
 
+template <unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS>
+void ST7066UController<N_ROWS, N_COLS, N_SCREENS>::_sendCommand(
+    uint8_t cmd, uint8_t enFlags, unsigned int delay_micros) {
 
-void NewhavenLcd0440::_sendCommand(uint8_t cmd, uint8_t enFlags, unsigned int delay_micros) {
   static const uint8_t ctrlFlags = LCD_RW_WRITE | LCD_RS_COMMAND;
   _byteSender->sendByte(cmd, ctrlFlags, enFlags);
   if (delay_micros > 0) {
