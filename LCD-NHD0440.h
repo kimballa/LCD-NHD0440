@@ -1,5 +1,5 @@
 /*
-  (c) Copyright 2021 Aaron Kimball
+  (c) Copyright 2021-2024 Aaron Kimball
   See full licensing terms at the end of this comment block, or in LICENSE.txt.
 
   Arduino driver for ST7066U-compatible LCD controllers.
@@ -53,7 +53,7 @@
 
 
   BSD 3-Clause license text:
-  Copyright 2022 Aaron Kimball
+  Copyright 2021-2024 Aaron Kimball
 
   Redistribution and use in source and binary forms, with or without modification, are
   permitted provided that the following conditions are met:
@@ -76,9 +76,7 @@
   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
   TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 */
-
 
 #ifndef LCD_NHD_0440_H
 #define LCD_NHD_0440_H
@@ -331,7 +329,7 @@ template<unsigned int N_ROWS, unsigned int N_COLS, unsigned int N_SCREENS = 1>
 class ST7066UController : public Print {
 public:
   ST7066UController(const ST7066UTiming &timing):
-    _timing(timing), _pos(0), _byteSender(NULL), _displayFlags(0) {
+    _timing(timing), _pos(0), _byteSender(NULL), _displayFlags(0), _isScrollPending(false) {
 
     if (N_SCREENS != 1 && N_SCREENS != 2) {
       DBGPRINTU("N_SCREENS must be 1 or 2; invalid argument: ", N_SCREENS);
@@ -343,7 +341,7 @@ public:
     _byteSender = NULL;
   };
 
-  // setup lcd board state.
+  /** Setup lcd board state. */
   void init(NhdByteSender *byteSender) {
     _byteSender = byteSender;
 
@@ -396,19 +394,19 @@ public:
     // The display is now ready for text.
   };
 
-  // clear screen and return home
+  /** Clear screen and return home. */
   void clear() {
     _sendCommand(LCD_OP_CLEAR, LCD_EN_ALL, _timing.clearDelayUs);
     setCursorPos(0, 0); // Reset Arduino knowledge of cursor & reset active display to TOP.
   };
 
-  // return cursor to home position
+  /** Return cursor to home position. */
   void home() {
     _sendCommand(LCD_OP_RETURN_HOME, LCD_EN_ALL, _timing.homeDelayUs);
     setCursorPos(0, 0); // Reset Arduino knowledge of cursor & reset active display to TOP.
   };
 
-  // turn display on or off
+  /** Turn display on or off. */
   void setDisplayVisible(bool visible) {
     if (visible) {
       _displayFlags |= DISP_FLAG_D1 | DISP_FLAG_D2;
@@ -419,7 +417,7 @@ public:
     _sendDisplayFlags();
   };
 
-  // turn cursor on or off
+  /** Turn cursor on or off. */
   void setCursor(bool visible, bool blinking) {
     // Only manipulate cursor for the active lcd subscreen (based on cursor row).
     // The inactive subscreen should always have no cursor shown.
@@ -447,7 +445,8 @@ public:
     _sendDisplayFlags();
   };
 
-  void reset() { init(_byteSender); }; // reset LCD state.
+  /** reset LCD state. */
+  void reset() { init(_byteSender); };
 
   // Set position on row (e.g., 0--3), col (e.g., 0--39) across the screen(s).
   /**
@@ -461,9 +460,16 @@ public:
    */
   void setCursorPos(uint8_t row, uint8_t col) {
     _setCursorPos(row, col, true);
+    _isScrollPending = false; // Explicitly moving the cursor clears any pending line-scroll demand.
   };
 
-  // Enable/disable scrolling display.
+  /** Move the cursor to the next position. */
+  void advanceCursor() {
+    setCursorPos(getRow(), getCol() + 1);
+    _handleColumnOverflow();
+  }
+
+  /** Enable/disable scrolling display. */
   void setScrollingTTY(bool scroll) {
     if (scroll) {
       _displayFlags |= DISP_FLAG_SCROLL;
@@ -472,7 +478,7 @@ public:
     }
   };
 
-  // write 1 character to the screen thru the Print interface.
+  /** Write one character to the screen thru the Print interface. */
   virtual size_t write(uint8_t chr) {
     if (chr == '\r') {
       setCursorPos(getRow(), 0);
@@ -491,20 +497,11 @@ public:
       return 1;
     }
 
-    if (getCol() >= N_COLS) {
-      // Prior write was to the last column on the screen, and we didn't handle
-      // a '\n' or '\r' above, meaning we're writing to the "n+1st" column. (nope!)
-      // Wrap to the next line before printing.
-      const uint8_t nextRow = getRow() + 1;
-      if (nextRow >= N_ROWS) {
-        if (_displayFlags & DISP_FLAG_SCROLL) {
-          _scrollScreen();
-        } else {
-          setCursorPos(0, 0); // Wrap back to the top.
-        }
-      } else {
-        setCursorPos(nextRow, 0);
-      }
+    _handleColumnOverflow(); // Make sure we're at a valid location.
+    if (_isScrollPending) {
+      // The above call to _handleColumnOverflow() (or another one since the last char write) has
+      // indicated the need to scroll the screen. Now that we're ready to add a new character, do so.
+      _scrollScreen();
     }
 
     // We're now in a valid location to write a character.
@@ -514,16 +511,18 @@ public:
     _byteSender->sendByte(chr, ctrlFlags, enablePin);
     _waitReady(_timing.defaultDelayUs);
     _incrementCol();
+    // If incrementCol() has pushed us off the screen edge, move to a valid position.
+    _handleColumnOverflow();
 
     return 1;
   };
 
-  // Return row portion of _pos.
+  /** Return row portion of _pos. */
   inline uint8_t getRow() const {
     return (_pos & ROW_MASK) >> ROW_SHIFT;
   };
 
-  // Return column portion of _pos.
+  /** Return column portion of _pos. */
   inline uint8_t getCol() const {
     return (_pos & COL_MASK) >> COL_SHIFT;
   };
@@ -554,7 +553,7 @@ private:
     _pos = _makePos(row, col); // Save this as our new position.
   };
 
-  // Ensures the cursor is visible on the specified display subscreen.
+  /** Ensures the cursor is visible on the specified display subscreen. */
   void _setCursorDisplay(uint8_t displayNum) {
     const uint8_t curDisplay = _subscreenForRow(getRow());
     if (curDisplay == displayNum) {
@@ -577,7 +576,7 @@ private:
     }
   };
 
-  // Send display and cursor vis flags to device.
+  /** Send display and cursor vis flags to device. */
   void _sendDisplayFlags() {
     uint8_t display1 = LCD_OP_DISPLAY_ON_OFF | ((_displayFlags >> DISPLAY_1_SHIFT) & DISPLAY_BITS_MASK);
     uint8_t display2 = LCD_OP_DISPLAY_ON_OFF | ((_displayFlags >> DISPLAY_2_SHIFT) & DISPLAY_BITS_MASK);
@@ -597,7 +596,7 @@ private:
     unsigned long elapsed = 0;
 
     while (elapsed < delay_micros) {
-      // TODO(aaron): Actually read the busy-flag field and wait for it to drop to zero
+      // TODO(aaron): Actually read the busy-flag field and wait for it to drop to zero.
       delayMicroseconds(delay_micros - elapsed);
       unsigned long now = micros();
       if (now < start_time) {
@@ -607,12 +606,12 @@ private:
     }
   };
 
-  /**
-   * Scroll all the lines up by 1.
-   */
+  /** Scroll all the lines up by 1. */
   void _scrollScreen() {
     constexpr uint8_t ctrlFlagsR = LCD_RW_READ | LCD_RS_DATA;
     constexpr uint8_t ctrlFlagsW = LCD_RW_WRITE | LCD_RS_DATA;
+
+    _isScrollPending = false; // No longer pending.
 
     for (uint8_t r = 1; r < N_ROWS; r++) {
       const uint8_t enFlagR = (_subscreenForRow(r) == DISPLAY_TOP) ? LCD_E1 : LCD_E2;
@@ -667,21 +666,49 @@ private:
     _setCursorPos(N_ROWS - 1, 0, false); // Return cursor to beginning of bottom line.
   };
 
-  // Create a _pos field value from a row and column.
+  /** Create a _pos field value from a row and column. */
   inline uint8_t _makePos(uint8_t row, uint8_t col) const {
     return ((row << ROW_SHIFT) & ROW_MASK) | ((col << COL_SHIFT) & COL_MASK);
   };
 
-  // Increment the 'col' field of pos by 1 and return the new 'col' value.
-  // Note that this can set _pos to illegal values where col >= N_COLS.
-  // The caller is responsible for detecting overflow.
+  /**
+   * Increment the 'col' field of pos by 1 and return the new 'col' value.
+   *
+   * Note that this can set _pos to illegal values where col >= N_COLS.
+   * The caller is responsible for detecting overflow.
+   */
   inline uint8_t _incrementCol() {
     // col is in low-order bits, so just increment.
     ++_pos;
     return getCol();
   };
 
-  // Which of the two subscreens is a given row on?
+  /**
+   * If the column position is beyond the rightmost column of the screen,
+   * wrap around to the next line. (If at the bottom of the screen, either
+   * wrap back to the top row or if in TTY mode, set a flag indicating that
+   * the next character write must "scroll" the screen up by a line).
+   */
+  void _handleColumnOverflow() {
+    if (getCol() >= N_COLS) {
+      // Prior write was to the last column on the screen or we advanced the cursor
+      // past the end of the row manually. Wrap to the next line.
+      const uint8_t nextRow = getRow() + 1;
+      if (nextRow >= N_ROWS) {
+        if (_displayFlags & DISP_FLAG_SCROLL) {
+          // We need to scroll everything up a line next time we write something.
+          // Set a flag promising to do that on the next write.
+          _isScrollPending = true;
+        } else {
+          setCursorPos(0, 0); // Wrap back to the top.
+        }
+      } else {
+        setCursorPos(nextRow, 0);
+      }
+    }
+  }
+
+  /** Which of the two subscreens is a given row on? */
   inline uint8_t _subscreenForRow(uint8_t row) const {
     return (row < 2 || N_SCREENS < 2) ? DISPLAY_TOP : DISPLAY_BOTTOM;
   };
@@ -694,6 +721,7 @@ private:
 
   uint8_t _pos; // row is [0--3] in ROW_MASK, col is [0--39] in COL_MASK.
   uint8_t _displayFlags; // state of display flags for both subscreens.
+  bool _isScrollPending; // set to true if we need to do a 'push-up scroll' on the next write().
 };
 
 #endif /* LCD_NHD_0440_H */
